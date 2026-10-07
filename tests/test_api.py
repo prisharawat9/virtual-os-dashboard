@@ -19,6 +19,8 @@ def client():
         os_sim.deadlock_mgr.processes = []
         os_sim.deadlock_mgr.allocation = {}
         os_sim.deadlock_mgr.maximum = {}
+        os_sim.memory_mgr.reset(1024)
+        os_sim.current_allocation_strategy = "first_fit"
         yield client
 
 
@@ -30,6 +32,8 @@ def test_initial_state_is_empty(client):
     assert data["cpu"]["active_processes"] == 0
     assert data["cpu"]["usage_pct"] == 0.0
     assert data["deadlock"]["safe"] is True
+    assert data["memory"]["total_mb"] == 1024
+    assert data["memory"]["used_mb"] == 0
 
 
 def test_create_and_delete_process_with_auto_pid(client):
@@ -47,6 +51,13 @@ def test_create_and_delete_process_with_auto_pid(client):
     proc1 = res.get_json()["process"]
     assert proc1["pid"] == "P1"
     assert proc1["name"] == "Browser"
+
+    # Verify memory state updated automatically
+    mem_res = client.get("/api/memory/state")
+    assert mem_res.status_code == 200
+    mem_data = mem_res.get_json()
+    assert mem_data["used_mb"] == 256
+    assert "P1" in mem_data["allocated_processes"]
 
     # Create second process
     p2_data = {
@@ -68,10 +79,15 @@ def test_create_and_delete_process_with_auto_pid(client):
     assert p_list[0]["pid"] == "P1"
     assert p_list[1]["pid"] == "P2"
 
-    # Delete P1
+    # Delete P1 -> should release memory
     res_del = client.delete("/api/processes/P1")
     assert res_del.status_code == 200
     assert len(res_del.get_json()["processes"]) == 1
+
+    mem_del = client.get("/api/memory/state").get_json()
+    assert mem_del["used_mb"] == 128
+    assert "P1" not in mem_del["allocated_processes"]
+    assert "P2" in mem_del["allocated_processes"]
 
 
 def test_invalid_process_input(client):
@@ -83,6 +99,12 @@ def test_invalid_process_input(client):
     # Delete non-existent process
     res_del = client.delete("/api/processes/NON_EXISTENT")
     assert res_del.status_code == 404
+
+    # Process creation exceeding total memory
+    huge_proc = {"name": "HugeProc", "memory_required": 2048}
+    res_huge = client.post("/api/processes", json=huge_proc)
+    assert res_huge.status_code == 400
+    assert "exceeds total memory" in res_huge.get_json()["error"]
 
 
 def test_scheduling_empty_processes_returns_error(client):
@@ -135,3 +157,92 @@ def test_banker_and_deadlock_on_user_processes(client):
     res_det = client.post("/api/deadlock/detect")
     assert res_det.status_code == 200
     assert res_det.get_json()["deadlock_detected"] is False
+
+
+def test_memory_allocation_and_strategy_endpoints(client):
+    # Test strategy change endpoint
+    strat_res = client.post("/api/memory/strategy", json={"strategy": "best_fit"})
+    assert strat_res.status_code == 200
+    assert strat_res.get_json()["strategy"] == "best_fit"
+
+    # Manual allocation endpoint
+    alloc_res = client.post("/api/memory/allocate", json={"process_id": "P10", "size": 300, "algorithm": "best_fit"})
+    assert alloc_res.status_code == 200
+    assert alloc_res.get_json()["success"] is True
+
+    # Check memory state
+    state_res = client.get("/api/memory/state")
+    assert state_res.status_code == 200
+    s_data = state_res.get_json()
+    assert s_data["used_mb"] == 300
+    assert s_data["allocated_processes"] == {"P10": 300}
+
+    # Manual deallocation
+    dealloc_res = client.post("/api/memory/deallocate", json={"process_id": "P10"})
+    assert dealloc_res.status_code == 200
+    assert dealloc_res.get_json()["success"] is True
+    assert client.get("/api/memory/state").get_json()["used_mb"] == 0
+
+
+def test_paging_api_endpoints(client):
+    # Test GET paging state
+    st_res = client.get("/api/paging/state")
+    assert st_res.status_code == 200
+    assert st_res.get_json()["integrated"] is True
+
+    # Run FIFO page replacement
+    fifo_payload = {
+        "reference_string": "1 2 3 4 1 2 5 1 2 3",
+        "frame_count": 3,
+        "algorithm": "FIFO"
+    }
+    fifo_res = client.post("/api/paging/run", json=fifo_payload)
+    assert fifo_res.status_code == 200
+    f_data = fifo_res.get_json()
+    assert f_data["algorithm"] == "FIFO"
+    assert f_data["page_faults"] == 8
+    assert f_data["page_hits"] == 2
+    assert len(f_data["frame_history"]) == 10
+
+    # Run LRU page replacement
+    lru_payload = {
+        "reference_string": [1, 2, 3, 4, 1, 2, 5, 1, 2, 3],
+        "frame_count": 3,
+        "algorithm": "LRU"
+    }
+    lru_res = client.post("/api/paging/run", json=lru_payload)
+    assert lru_res.status_code == 200
+    assert lru_res.get_json()["algorithm"] == "LRU"
+
+    # Run Optimal page replacement
+    opt_payload = {
+        "reference_string": "1 2 3 4 1 2 5 1 2 3",
+        "frame_count": 3,
+        "algorithm": "OPTIMAL"
+    }
+    opt_res = client.post("/api/paging/run", json=opt_payload)
+    assert opt_res.status_code == 200
+    assert opt_res.get_json()["algorithm"] == "Optimal"
+    assert opt_res.get_json()["page_faults"] == 6
+
+    # Test paging comparison endpoint
+    comp_res = client.post("/api/paging/compare", json={"reference_string": "1 2 3 4 1 2 5 1 2 3", "frame_count": 3})
+    assert comp_res.status_code == 200
+    c_data = comp_res.get_json()
+    assert c_data["best_algorithm"] == "Optimal"
+    assert len(c_data["comparison"]) == 3
+
+
+def test_paging_invalid_inputs(client):
+    # Frame count <= 0
+    res = client.post("/api/paging/run", json={"reference_string": "1 2 3", "frame_count": 0})
+    assert res.status_code == 400
+
+    # Empty reference string
+    res_empty = client.post("/api/paging/run", json={"reference_string": "", "frame_count": 3})
+    assert res_empty.status_code == 400
+
+    # Unknown algorithm
+    res_unk = client.post("/api/paging/run", json={"reference_string": "1 2 3", "frame_count": 3, "algorithm": "INVALID"})
+    assert res_unk.status_code == 400
+

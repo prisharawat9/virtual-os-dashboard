@@ -103,6 +103,20 @@ function initEventListeners() {
   // Scheduling Form Submit
   document.getElementById('form-scheduling').addEventListener('submit', handleRunScheduling);
 
+  // Memory Strategy & Reset Controls
+  const stratSelect = document.getElementById('mem-strategy-select');
+  if (stratSelect) stratSelect.addEventListener('change', handleStrategyChange);
+
+  const resetBtn = document.getElementById('btn-reset-memory');
+  if (resetBtn) resetBtn.addEventListener('click', handleResetMemory);
+
+  // Paging Simulation Form & Compare
+  const formPaging = document.getElementById('form-paging');
+  if (formPaging) formPaging.addEventListener('submit', handleRunPaging);
+
+  const comparePagingBtn = document.getElementById('btn-compare-paging');
+  if (comparePagingBtn) comparePagingBtn.addEventListener('click', handleComparePaging);
+
   // Deadlock Buttons
   document.getElementById('btn-run-safety-check').addEventListener('click', handleRunSafetyCheck);
   document.getElementById('btn-run-detect-deadlock').addEventListener('click', handleRunDeadlockDetection);
@@ -168,6 +182,10 @@ function updateSummaryCards(state) {
   // Page Faults
   const paging = state.paging;
   document.getElementById('card-fault-val').textContent = paging.page_faults;
+  const hitSub = document.getElementById('card-hit-sub');
+  if (hitSub) {
+    hitSub.textContent = `${paging.hit_ratio_pct}% hit ratio (${paging.page_hits} hits)`;
+  }
 
   // Header Deadlock Status Badge
   const deadlock = state.deadlock;
@@ -217,37 +235,107 @@ function updateProcessTable(processes) {
 }
 
 function updateMemoryDisplay(mem) {
-  document.getElementById('mem-total-val').textContent = `${mem.total_mb} MB`;
-  document.getElementById('mem-used-val').textContent = `${mem.used_mb} MB`;
-  document.getElementById('mem-free-val').textContent = `${mem.free_mb} MB`;
-  document.getElementById('mem-util-val').textContent = `${mem.utilization_pct}%`;
+  if (!mem) return;
+
+  const totalElem = document.getElementById('mem-total-val');
+  const usedElem = document.getElementById('mem-used-val');
+  const freeElem = document.getElementById('mem-free-val');
+  const utilElem = document.getElementById('mem-util-val');
+  const fragElem = document.getElementById('mem-frag-val');
+  const stratSelect = document.getElementById('mem-strategy-select');
+
+  if (totalElem) totalElem.textContent = `${mem.total_mb} MB`;
+  if (usedElem) usedElem.textContent = `${mem.used_mb} MB`;
+  if (freeElem) freeElem.textContent = `${mem.free_mb} MB`;
+  if (utilElem) utilElem.textContent = `${mem.utilization_pct}%`;
+  if (fragElem) fragElem.textContent = `${mem.external_fragmentation || 0} MB`;
+  if (stratSelect && mem.allocation_strategy) stratSelect.value = mem.allocation_strategy;
 
   const mapBar = document.getElementById('memoryMapBar');
   const legend = document.getElementById('memoryLegend');
+  const blocksTable = document.querySelector('#memoryBlocksTable tbody');
 
-  if (!mapBar || !legend) return;
-
-  if (mem.allocation_map && mem.allocation_map.length > 0) {
-    mapBar.innerHTML = mem.allocation_map.map((block, idx) => {
+  if (mapBar && mem.allocation_map && mem.allocation_map.length > 0) {
+    mapBar.innerHTML = mem.allocation_map.map((block) => {
       const pct = (block.size / mem.total_mb) * 100;
       const label = block.pid ? block.pid : 'FREE';
-      return `<div class="memory-block" style="width: ${pct}%; background-color: ${block.color};" title="${label}: ${block.size} MB">${label}</div>`;
+      return `<div class="memory-block" style="width: ${pct}%; background-color: ${block.color};" title="${label}: ${block.size} MB (${block.start} - ${block.start + block.size} MB)">${label}</div>`;
     }).join('');
 
-    legend.innerHTML = mem.allocation_map.map(b => `
-      <div class="legend-item">
-        <span class="legend-color" style="background-color: ${b.color};"></span>
-        <span>${b.pid || 'Free Memory'}: ${b.size} MB</span>
-      </div>
+    if (legend) {
+      legend.innerHTML = mem.allocation_map.map(b => `
+        <div class="legend-item">
+          <span class="legend-color" style="background-color: ${b.color};"></span>
+          <span>${b.pid ? `Process ${b.pid}` : 'Free Memory'}: ${b.size} MB</span>
+        </div>
+      `).join('');
+    }
+  }
+
+  if (blocksTable && mem.blocks) {
+    blocksTable.innerHTML = mem.blocks.map(b => `
+      <tr>
+        <td><strong>${b.start} MB</strong></td>
+        <td><strong>${b.end} MB</strong></td>
+        <td>${b.size} MB</td>
+        <td><span class="badge-state ${b.is_allocated ? 'RUNNING' : 'NEW'}">${b.is_allocated ? 'Allocated' : 'Free'}</span></td>
+        <td>${b.process_id ? `<span class="pid-tag">${b.process_id}</span>` : '<span style="color: var(--text-dim);">Unallocated</span>'}</td>
+      </tr>
     `).join('');
   }
 }
 
 function updatePagingDisplay(paging) {
-  document.getElementById('paging-frames-val').textContent = paging.frame_count;
-  document.getElementById('paging-faults-val').textContent = paging.page_faults;
-  document.getElementById('paging-hits-val').textContent = paging.page_hits;
-  document.getElementById('paging-ratio-val').textContent = `${paging.hit_ratio_pct}%`;
+  if (!paging) return;
+
+  const framesElem = document.getElementById('paging-frames-val');
+  const totalRefsElem = document.getElementById('paging-total-refs-val');
+  const faultsElem = document.getElementById('paging-faults-val');
+  const hitsElem = document.getElementById('paging-hits-val');
+  const ratioElem = document.getElementById('paging-ratio-val');
+  const currentAlgoBadge = document.getElementById('paging-current-algo-badge');
+
+  if (framesElem) framesElem.textContent = paging.frame_count;
+  if (totalRefsElem) totalRefsElem.textContent = paging.total_references || 0;
+  if (faultsElem) faultsElem.textContent = paging.page_faults;
+  if (hitsElem) hitsElem.textContent = paging.page_hits;
+  if (ratioElem) ratioElem.textContent = `${paging.hit_ratio_pct}%`;
+  if (currentAlgoBadge) currentAlgoBadge.textContent = paging.algorithm || 'FIFO';
+
+  // Render Frame Grid
+  const framesGrid = document.getElementById('pagingFramesGrid');
+  if (framesGrid) {
+    const history = paging.frame_history || [];
+    const lastStep = history.length > 0 ? history[history.length - 1] : null;
+    const currentFrames = lastStep ? lastStep.frames : Array(paging.frame_count).fill(null);
+
+    framesGrid.innerHTML = currentFrames.map((page, idx) => `
+      <div class="frame-box">
+        <span class="frame-num">Frame ${idx}</span>
+        <span class="frame-content">${page !== null && page !== undefined ? `Page ${page}` : '<em style="color: var(--text-dim); font-size:12px;">Empty</em>'}</span>
+      </div>
+    `).join('');
+  }
+
+  // Render Step-by-Step History Log Table
+  const historyTable = document.querySelector('#pagingHistoryTable tbody');
+  if (historyTable) {
+    const history = paging.frame_history || [];
+    if (history.length === 0) {
+      historyTable.innerHTML = `<tr><td colspan="6" style="text-align: center; color: var(--text-dim);">No page replacement simulation executed yet. Use the controls above to run.</td></tr>`;
+    } else {
+      historyTable.innerHTML = history.map(h => `
+        <tr>
+          <td><strong>Step ${h.step}</strong></td>
+          <td><span class="pid-tag" style="background-color: rgba(139, 92, 246, 0.2); color: var(--accent-purple);">Page ${h.page}</span></td>
+          <td>[ ${h.frames.map(f => f !== null ? f : '-').join(', ')} ]</td>
+          <td><span class="badge-state ${h.status === 'Hit' ? 'RUNNING' : 'TERMINATED'}">${h.status}</span></td>
+          <td>${h.replaced_page !== null && h.replaced_page !== undefined ? `<span style="color: var(--accent-red); font-weight:600;">Page ${h.replaced_page}</span>` : '<span style="color: var(--text-dim);">-</span>'}</td>
+          <td style="font-size: 12px; color: var(--text-muted);">${escapeHtml(h.reason || '')}</td>
+        </tr>
+      `).join('');
+    }
+  }
 }
 
 function updateDeadlockStatus(deadlock) {
@@ -644,6 +732,115 @@ async function handleResourceRequest(e) {
     }
 
     fetchSystemState();
+
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
+/* ==========================================================================
+   MEMORY & PAGING FORM HANDLERS
+   ========================================================================== */
+async function handleStrategyChange(e) {
+  const strategy = e.target.value;
+  try {
+    const res = await fetch('/api/memory/strategy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ strategy }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to change memory strategy');
+    showToast(`Memory strategy switched to ${strategy.replace('_', ' ')}`, 'success');
+    fetchSystemState();
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
+async function handleResetMemory() {
+  if (!confirm('Are you sure you want to reset memory allocation?')) return;
+  try {
+    const res = await fetch('/api/memory/reset', { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to reset memory');
+    showToast('Physical memory reset successfully.', 'success');
+    addLogEntry('Memory Manager reset to initial unallocated state.', 'warning');
+    fetchSystemState();
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
+async function handleRunPaging(e) {
+  e.preventDefault();
+  const refStr = document.getElementById('paging-ref-string').value.trim();
+  const frames = parseInt(document.getElementById('paging-frames-input').value) || 3;
+  const algorithm = document.getElementById('paging-algo-select').value;
+
+  try {
+    const res = await fetch('/api/paging/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reference_string: refStr, frame_count: frames, algorithm }),
+    });
+
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Paging simulation failed');
+
+    const compBox = document.getElementById('paging-comparison-box');
+    if (compBox) compBox.style.display = 'none';
+
+    updatePagingDisplay(data);
+    showToast(`Paging simulation executed (${data.algorithm}): ${data.page_faults} faults, ${data.page_hits} hits.`, 'success');
+    addLogEntry(`Ran Page Replacement (${data.algorithm}): Faults=${data.page_faults}, Hits=${data.page_hits}, Hit Rate=${data.hit_ratio_pct || data.page_hit_rate}%`, 'info');
+
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
+async function handleComparePaging() {
+  const refStr = document.getElementById('paging-ref-string').value.trim();
+  const frames = parseInt(document.getElementById('paging-frames-input').value) || 3;
+
+  try {
+    const res = await fetch('/api/paging/compare', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reference_string: refStr, frame_count: frames }),
+    });
+
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Paging comparison failed');
+
+    const compBox = document.getElementById('paging-comparison-box');
+    if (compBox) compBox.style.display = 'block';
+
+    const bestBadge = document.getElementById('paging-best-algo-badge');
+    if (bestBadge) bestBadge.textContent = `Best: ${data.best_algorithm}`;
+
+    const compTable = document.querySelector('#pagingComparisonTable tbody');
+    if (compTable) {
+      compTable.innerHTML = data.comparison.map(c => `
+        <tr style="${c.algorithm === data.best_algorithm ? 'background-color: rgba(16, 185, 129, 0.1);' : ''}">
+          <td><strong>${c.algorithm}</strong> ${c.algorithm === data.best_algorithm ? '<span class="pid-tag" style="background-color: var(--accent-green); color:#fff; margin-left:6px;">BEST</span>' : ''}</td>
+          <td>${c.total_references}</td>
+          <td><strong style="color: var(--accent-red);">${c.page_faults}</strong></td>
+          <td><strong style="color: var(--accent-green);">${c.page_hits}</strong></td>
+          <td>${c.page_fault_rate}%</td>
+          <td>${c.page_hit_rate}%</td>
+        </tr>
+      `).join('');
+    }
+
+    const bestDetail = data.detailed_results ? data.detailed_results[data.best_algorithm] : null;
+    if (bestDetail) {
+      updatePagingDisplay(bestDetail);
+    }
+
+    showToast(`Comparison complete! Best algorithm: ${data.best_algorithm}`, 'success');
+    addLogEntry(`Compared Paging Algorithms: Best performer is ${data.best_algorithm}`, 'success');
 
   } catch (err) {
     showToast(err.message, 'error');

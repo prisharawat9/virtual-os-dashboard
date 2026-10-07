@@ -14,6 +14,21 @@ if BASE_DIR not in sys.path:
 from flask import Flask, jsonify, render_template, request, send_from_directory
 
 from backend.deadlock import DeadlockManager
+from backend.memory import (
+    MemoryManager,
+    allocate_first_fit,
+    allocate_best_fit,
+    allocate_worst_fit,
+    deallocate_process,
+    reset_memory,
+    fifo,
+    lru,
+    optimal,
+    parse_reference_string,
+    calculate_memory_stats,
+    calculate_page_replacement_stats,
+    compare_page_replacement,
+)
 from backend.scheduling import Process, schedule
 
 
@@ -29,32 +44,32 @@ class SimulatedOS:
         self.deadlock_mgr = DeadlockManager()
         self.deadlock_mgr.sync_with_processes([])
 
-        # Member 2 Memory Module Integration State Placeholder
-        self.memory_state: dict[str, Any] = {
-            "total_mb": 1024,
-            "used_mb": 0,
-            "free_mb": 1024,
-            "utilization_pct": 0.0,
-            "allocation_map": [],
-            "integrated": False,
-            "message": "Memory management module awaiting Member 2 integration.",
-        }
+        # Member 2 Authoritative Memory Manager instance
+        self.memory_mgr = MemoryManager(total_memory=1024)
+        self.current_allocation_strategy = "first_fit"
 
-        # Member 2 Paging Module Integration State Placeholder
+        # Member 2 Memory State Dictionary (synced with memory_mgr)
+        self.memory_state: dict[str, Any] = {}
+        
+        # Member 2 Paging Module State
         self.paging_state: dict[str, Any] = {
             "page_faults": 0,
             "page_hits": 0,
             "total_references": 0,
             "hit_ratio_pct": 0.0,
+            "page_fault_rate": 0.0,
             "frame_count": 4,
-            "frames": [],
+            "reference_string": [],
+            "algorithm": "FIFO",
+            "frame_history": [],
             "supported_algorithms": ["FIFO", "LRU", "OPTIMAL"],
-            "integrated": False,
-            "message": "Paging & replacement module awaiting Member 2 integration.",
+            "integrated": True,
+            "message": "Page replacement module active.",
         }
 
         self.cpu_ticks = 0
         self.cpu_usage_pct = 0.0
+        self.update_metrics()
 
 
     def generate_unique_pid(self) -> str:
@@ -71,39 +86,50 @@ class SimulatedOS:
         # Synchronize deadlock processes
         self.deadlock_mgr.sync_with_processes([p.pid for p in self.processes])
         
-        # Recalculate dynamic memory metrics based on active processes
-        used_mem = sum(p.memory_required for p in self.processes)
-        total_mem = max(1024, used_mem + 256)
-        free_mem = max(0, total_mem - used_mem)
-        util_pct = round((used_mem / total_mem) * 100, 1) if total_mem > 0 else 0.0
+        # Synchronize MemoryManager with active processes
+        allocated_pids = set(self.memory_mgr.get_allocated_processes().keys())
+        active_pids = {p.pid for p in self.processes}
 
-        # Dynamic allocation map based on active processes
+        # Deallocate orphaned process allocations
+        for orphaned_pid in allocated_pids - active_pids:
+            self.memory_mgr.deallocate(orphaned_pid)
+
+        # Allocate memory for active processes needing memory
+        for p in self.processes:
+            if p.memory_required > 0 and p.pid not in allocated_pids:
+                self.memory_mgr.allocate(p.pid, p.memory_required, self.current_allocation_strategy)
+
+        # Calculate statistics via Member 2's calculate_memory_stats
+        mem_stats = calculate_memory_stats(self.memory_mgr)
+
+        # Generate dynamic color-coded allocation map
         colors = ["#3b82f6", "#10b981", "#f59e0b", "#8b5cf6", "#ec4899", "#06b6d4"]
-        alloc_map = []
-        current_offset = 0
+        proc_color_map = {}
         for idx, p in enumerate(self.processes):
-            if p.memory_required > 0:
-                alloc_map.append({
-                    "pid": p.pid,
-                    "start": current_offset,
-                    "size": p.memory_required,
-                    "color": colors[idx % len(colors)],
-                })
-                current_offset += p.memory_required
+            proc_color_map[p.pid] = colors[idx % len(colors)]
 
-        if free_mem > 0 and self.processes:
-            alloc_map.append({
-                "pid": None,
-                "start": current_offset,
-                "size": free_mem,
-                "color": "#374151",
-            })
+        alloc_map = []
+        for block in self.memory_mgr.blocks:
+            b_dict = block.to_dict()
+            if block.is_allocated and block.process_id:
+                b_dict["color"] = proc_color_map.get(block.process_id, "#3b82f6")
+            else:
+                b_dict["color"] = "#374151"
+            alloc_map.append(b_dict)
 
-        self.memory_state["total_mb"] = total_mem
-        self.memory_state["used_mb"] = used_mem
-        self.memory_state["free_mb"] = free_mem
-        self.memory_state["utilization_pct"] = util_pct
-        self.memory_state["allocation_map"] = alloc_map
+        self.memory_state = {
+            "total_mb": mem_stats["total_memory"],
+            "used_mb": mem_stats["used_memory"],
+            "free_mb": mem_stats["free_memory"],
+            "utilization_pct": mem_stats["utilization_percentage"],
+            "external_fragmentation": mem_stats["external_fragmentation"],
+            "allocation_strategy": self.current_allocation_strategy,
+            "allocated_processes": mem_stats["allocated_processes"],
+            "blocks": [b.to_dict() for b in self.memory_mgr.blocks],
+            "allocation_map": alloc_map,
+            "integrated": True,
+            "message": f"Memory managed via {self.current_allocation_strategy.replace('_', ' ').title()}.",
+        }
 
     def get_full_state(self) -> dict[str, Any]:
         """Return the aggregated central OS state snapshot."""
@@ -190,6 +216,12 @@ def create_process():
             state="READY",
         )
         
+        # Verify and allocate memory if memory_required > 0
+        if memory_required > 0:
+            alloc_res = os_sim.memory_mgr.allocate(pid, memory_required, os_sim.current_allocation_strategy)
+            if not alloc_res["success"]:
+                return jsonify({"error": alloc_res["message"]}), 400
+
         os_sim.processes.append(new_process)
         
         # Synchronize deadlock manager with process and optional max claims
@@ -209,7 +241,6 @@ def create_process():
         return jsonify({"error": f"invalid payload: {str(err)}"}), 400
 
 
-
 @app.route("/api/processes/<pid>", methods=["DELETE"])
 def delete_process(pid: str):
     """Delete a process by PID."""
@@ -218,6 +249,7 @@ def delete_process(pid: str):
         return jsonify({"error": f"process '{pid}' not found"}), 404
 
     os_sim.processes = [p for p in os_sim.processes if p.pid != pid]
+    os_sim.memory_mgr.deallocate(pid)
     os_sim.deadlock_mgr.sync_with_processes([p.pid for p in os_sim.processes])
     
     return jsonify({
@@ -321,16 +353,220 @@ def run_deadlock_detection():
 # Member 2 Integration Endpoints (Memory & Paging)
 @app.route("/api/memory/state", methods=["GET"])
 def get_memory_state():
-    """Integration point for Member 2 memory state."""
+    """Return Member 2 MemoryManager state."""
+    os_sim.update_metrics()
     return jsonify(os_sim.memory_state)
+
+
+@app.route("/api/memory/allocate", methods=["POST"])
+def allocate_memory():
+    """
+    Allocate memory for a process/PID.
+    Expected JSON: {process_id: "P1", size: 100, [algorithm]: "first_fit"|"best_fit"|"worst_fit"}
+    """
+    data = request.get_json() or {}
+    pid = str(data.get("process_id", "")).strip()
+    size = int(data.get("size", 0))
+    algorithm = str(data.get("algorithm", os_sim.current_allocation_strategy)).strip().lower()
+
+    if not pid:
+        return jsonify({"error": "process_id is required"}), 400
+
+    result = os_sim.memory_mgr.allocate(pid, size, algorithm)
+    if not result["success"]:
+        return jsonify(result), 400
+
+    # Ensure process exists in processes list if not already present
+    if not any(p.pid == pid for p in os_sim.processes):
+        os_sim.processes.append(
+            Process(pid=pid, name=pid, arrival_time=0, burst_time=1, priority=0, memory_required=size, state="READY")
+        )
+    else:
+        for p in os_sim.processes:
+            if p.pid == pid:
+                p.memory_required = size
+
+    os_sim.update_metrics()
+    return jsonify(result)
+
+
+@app.route("/api/memory/deallocate", methods=["POST"])
+def deallocate_memory():
+    """
+    Deallocate memory for a process/PID.
+    Expected JSON: {process_id: "P1"}
+    """
+    data = request.get_json() or {}
+    pid = str(data.get("process_id", "")).strip()
+
+    if not pid:
+        return jsonify({"error": "process_id is required"}), 400
+
+    result = os_sim.memory_mgr.deallocate(pid)
+    if not result["success"]:
+        return jsonify(result), 400
+
+    # Remove process from active processes and sync deadlock manager
+    os_sim.processes = [p for p in os_sim.processes if p.pid != pid]
+    os_sim.deadlock_mgr.sync_with_processes([p.pid for p in os_sim.processes])
+
+    os_sim.update_metrics()
+    return jsonify(result)
+
+
+@app.route("/api/memory/strategy", methods=["POST"])
+def set_memory_strategy():
+    """
+    Set active allocation strategy (first_fit, best_fit, worst_fit).
+    Expected JSON: {strategy: "first_fit"|"best_fit"|"worst_fit"}
+    """
+    data = request.get_json() or {}
+    strategy = str(data.get("strategy", "first_fit")).strip().lower()
+
+    if strategy not in ("first_fit", "best_fit", "worst_fit", "firstfit", "bestfit", "worstfit"):
+        return jsonify({"error": f"Invalid strategy '{strategy}'. Choose from first_fit, best_fit, or worst_fit."}), 400
+
+    os_sim.current_allocation_strategy = strategy
+    os_sim.update_metrics()
+    return jsonify({
+        "message": f"Allocation strategy set to {strategy}.",
+        "strategy": os_sim.current_allocation_strategy,
+        "memory_state": os_sim.memory_state,
+    })
+
+
+@app.route("/api/memory/reset", methods=["POST"])
+def reset_memory_state():
+    """
+    Reset memory manager to initial empty state.
+    Expected JSON: {[total_memory]: int}
+    """
+    data = request.get_json() or {}
+    total_mem = data.get("total_memory")
+    if total_mem is not None:
+        total_mem = int(total_mem)
+
+    try:
+        res = reset_memory(os_sim.memory_mgr, total_mem)
+        os_sim.update_metrics()
+        return jsonify(res)
+    except ValueError as err:
+        return jsonify({"error": str(err)}), 400
 
 
 @app.route("/api/paging/state", methods=["GET"])
 def get_paging_state():
-    """Integration point for Member 2 paging state."""
+    """Return Member 2 paging state."""
     return jsonify(os_sim.paging_state)
+
+
+@app.route("/api/paging/run", methods=["POST"])
+def run_paging_simulation():
+    """
+    Run Page Replacement simulation (FIFO, LRU, Optimal).
+    Expected JSON: {reference_string: "1 2 3 4" | [1, 2, 3, 4], frame_count: 3, algorithm: "FIFO"|"LRU"|"OPTIMAL"}
+    """
+    data = request.get_json() or {}
+    ref_str_input = data.get("reference_string")
+    frame_count = int(data.get("frame_count", 4))
+    algorithm = str(data.get("algorithm", "FIFO")).strip().upper()
+
+    if ref_str_input is None or (isinstance(ref_str_input, str) and not ref_str_input.strip()):
+        return jsonify({"error": "reference_string is required"}), 400
+    if frame_count <= 0:
+        return jsonify({"error": "frame_count must be a positive integer greater than 0"}), 400
+
+    try:
+        parsed_ref = parse_reference_string(ref_str_input)
+        if not parsed_ref:
+            return jsonify({"error": "reference_string cannot be empty"}), 400
+
+        if algorithm == "FIFO":
+            result = fifo(parsed_ref, frame_count)
+        elif algorithm == "LRU":
+            result = lru(parsed_ref, frame_count)
+        elif algorithm in ("OPTIMAL", "BELADY"):
+            result = optimal(parsed_ref, frame_count)
+        else:
+            return jsonify({"error": f"Unsupported algorithm '{algorithm}'. Supported: FIFO, LRU, OPTIMAL."}), 400
+
+        # Update central paging state
+        os_sim.paging_state.update({
+            "page_faults": result["page_faults"],
+            "page_hits": result["page_hits"],
+            "total_references": result["total_references"],
+            "hit_ratio_pct": result["page_hit_rate"],
+            "page_fault_rate": result["page_fault_rate"],
+            "frame_count": result["frame_count"],
+            "reference_string": result["reference_string"],
+            "algorithm": result["algorithm"],
+            "frame_history": result["frame_history"],
+            "integrated": True,
+            "message": f"Paging simulation completed using {result['algorithm']}.",
+        })
+
+        return jsonify(result)
+
+    except ValueError as err:
+        return jsonify({"error": str(err)}), 400
+    except TypeError as err:
+        return jsonify({"error": str(err)}), 400
+    except Exception as err:
+        return jsonify({"error": f"Paging execution error: {str(err)}"}), 500
+
+
+@app.route("/api/paging/compare", methods=["POST"])
+def compare_paging_algorithms():
+    """
+    Run FIFO, LRU, and Optimal page replacement algorithms on identical inputs for side-by-side comparison.
+    Expected JSON: {reference_string: "1 2 3 4" | [1, 2, 3, 4], frame_count: 3}
+    """
+    data = request.get_json() or {}
+    ref_str_input = data.get("reference_string")
+    frame_count = int(data.get("frame_count", 4))
+
+    if ref_str_input is None or (isinstance(ref_str_input, str) and not ref_str_input.strip()):
+        return jsonify({"error": "reference_string is required"}), 400
+    if frame_count <= 0:
+        return jsonify({"error": "frame_count must be a positive integer greater than 0"}), 400
+
+    try:
+        parsed_ref = parse_reference_string(ref_str_input)
+        if not parsed_ref:
+            return jsonify({"error": "reference_string cannot be empty"}), 400
+
+        result = compare_page_replacement(parsed_ref, frame_count)
+
+        # Update paging_state with best algorithm details for UI preview
+        best_algo = result.get("best_algorithm", "FIFO")
+        best_detail = result.get("detailed_results", {}).get(best_algo, {})
+
+        if best_detail:
+            os_sim.paging_state.update({
+                "page_faults": best_detail["page_faults"],
+                "page_hits": best_detail["page_hits"],
+                "total_references": best_detail["total_references"],
+                "hit_ratio_pct": best_detail["page_hit_rate"],
+                "page_fault_rate": best_detail["page_fault_rate"],
+                "frame_count": best_detail["frame_count"],
+                "reference_string": best_detail["reference_string"],
+                "algorithm": f"Comparison (Best: {best_algo})",
+                "frame_history": best_detail["frame_history"],
+                "integrated": True,
+                "message": f"Comparative analysis completed. Best algorithm: {best_algo}.",
+            })
+
+        return jsonify(result)
+
+    except ValueError as err:
+        return jsonify({"error": str(err)}), 400
+    except TypeError as err:
+        return jsonify({"error": str(err)}), 400
+    except Exception as err:
+        return jsonify({"error": f"Paging comparison error: {str(err)}"}), 500
 
 
 if __name__ == "__main__":
     print("Starting Virtual OS Dashboard server on http://127.0.0.1:5000 ...")
     app.run(host="127.0.0.1", port=5000, debug=True)
+

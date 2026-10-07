@@ -347,10 +347,21 @@
         <!-- TAB 4: MEMORY MANAGEMENT (MEMBER 2 READY)  -->
         <!-- ========================================== -->
         <section id="view-memory" class="tab-view">
-          <div class="notice-banner info">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
-            <div>
-              <strong>Member 2 Integration Point:</strong> Memory allocation and replacement API hooks are prepared. The layout below displays current memory state snapshot.
+          <div class="card">
+            <div class="card-header border-bottom">
+              <div>
+                <h3 class="card-heading">Physical Memory Management</h3>
+                <p class="card-subheading">Member 2 Dynamic Partition Allocation & Block Coalescing Engine</p>
+              </div>
+              <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+                <label for="mem-strategy-select" style="font-size:12px; font-weight:600; color:var(--text-muted);">Strategy:</label>
+                <select id="mem-strategy-select" class="form-control" style="width: auto; padding: 6px 12px;">
+                  <option value="first_fit">First Fit</option>
+                  <option value="best_fit">Best Fit</option>
+                  <option value="worst_fit">Worst Fit</option>
+                </select>
+                <button class="btn btn-secondary btn-sm" id="btn-reset-memory">Reset Memory</button>
+              </div>
             </div>
           </div>
 
@@ -361,22 +372,26 @@
             </div>
             <div class="card metric-card">
               <div class="card-title">Used Memory</div>
-              <div class="card-value color-blue" id="mem-used-val">640 MB</div>
+              <div class="card-value color-blue" id="mem-used-val">0 MB</div>
             </div>
             <div class="card metric-card">
               <div class="card-title">Free Memory</div>
-              <div class="card-value color-green" id="mem-free-val">384 MB</div>
+              <div class="card-value color-green" id="mem-free-val">1024 MB</div>
             </div>
             <div class="card metric-card">
               <div class="card-title">Memory Utilization</div>
-              <div class="card-value color-purple" id="mem-util-val">62.5%</div>
+              <div class="card-value color-purple" id="mem-util-val">0.0%</div>
+            </div>
+            <div class="card metric-card">
+              <div class="card-title">External Fragmentation</div>
+              <div class="card-value color-orange" id="mem-frag-val">0 MB</div>
             </div>
           </div>
 
           <!-- MEMORY ALLOCATION MAP GRID -->
           <div class="card margin-top-lg">
             <div class="card-header border-bottom">
-              <h3 class="card-heading">Memory Allocation Map (Simulated Blocks)</h3>
+              <h3 class="card-heading">Physical Memory Allocation Map</h3>
             </div>
             <div class="card-body">
               <div class="memory-map-bar" id="memoryMapBar">
@@ -387,49 +402,160 @@
               </div>
             </div>
           </div>
+
+          <!-- MEMORY BLOCKS DETAIL TABLE -->
+          <div class="card margin-top-lg">
+            <div class="card-header border-bottom">
+              <h3 class="card-heading">Memory Partition Blocks & Status</h3>
+            </div>
+            <div class="table-container">
+              <table class="data-table" id="memoryBlocksTable">
+                <thead>
+                  <tr>
+                    <th>Start Address</th>
+                    <th>End Address</th>
+                    <th>Block Size</th>
+                    <th>Status</th>
+                    <th>Allocated Process</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <!-- Rendered via JS -->
+                </tbody>
+              </table>
+            </div>
+          </div>
         </section>
 
         <!-- ========================================== -->
-        <!-- TAB 5: PAGING (MEMBER 2 READY)             -->
+        <!-- TAB 5: PAGING (MEMBER 2 INTEGRATED)        -->
         <!-- ========================================== -->
         <section id="view-paging" class="tab-view">
-          <div class="notice-banner info">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
-            <div>
-              <strong>Member 2 Integration Point:</strong> Paging & Page Replacement module structure ready for FIFO, LRU, and Optimal page replacement algorithms.
+          <div class="card">
+            <div class="card-header border-bottom">
+              <div>
+                <h3 class="card-heading">Virtual Memory & Page Replacement Simulator</h3>
+                <p class="card-subheading">Execute Member 2's FIFO, LRU, and Optimal algorithms on custom page reference strings.</p>
+              </div>
+            </div>
+
+            <div class="card-body">
+              <form id="form-paging" class="scheduling-controls">
+                <div class="form-group" style="flex: 2; min-width: 220px;">
+                  <label for="paging-ref-string">Page Reference String (space/comma separated)</label>
+                  <input type="text" id="paging-ref-string" class="form-control" value="7 0 1 2 0 3 0 4 2 3 0 3 2 1 2 0 1 7 0 1" placeholder="e.g. 7 0 1 2 0 3 0 4" required />
+                </div>
+
+                <div class="form-group" style="flex: 1; min-width: 120px;">
+                  <label for="paging-frames-input">Page Frames</label>
+                  <input type="number" id="paging-frames-input" class="form-control" value="3" min="1" max="10" required />
+                </div>
+
+                <div class="form-group" style="flex: 1; min-width: 140px;">
+                  <label for="paging-algo-select">Algorithm</label>
+                  <select id="paging-algo-select" class="form-control">
+                    <option value="FIFO">FIFO (First-In, First-Out)</option>
+                    <option value="LRU">LRU (Least Recently Used)</option>
+                    <option value="OPTIMAL">Optimal (Belady's)</option>
+                  </select>
+                </div>
+
+                <div class="form-group align-end" style="display: flex; gap: 10px;">
+                  <button type="submit" class="btn btn-primary" id="btn-run-paging">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                    RUN SIMULATION
+                  </button>
+                  <button type="button" class="btn btn-secondary" id="btn-compare-paging">
+                    COMPARE ALL
+                  </button>
+                </div>
+              </form>
             </div>
           </div>
 
-          <div class="cards-grid margin-top-md">
+          <!-- PAGING METRICS SUMMARY CARDS -->
+          <div class="cards-grid margin-top-lg">
             <div class="card metric-card">
               <div class="card-title">Page Frames</div>
-              <div class="card-value" id="paging-frames-val">4</div>
+              <div class="card-value" id="paging-frames-val">3</div>
+            </div>
+            <div class="card metric-card">
+              <div class="card-title">Total References</div>
+              <div class="card-value color-blue" id="paging-total-refs-val">0</div>
             </div>
             <div class="card metric-card">
               <div class="card-title">Page Faults</div>
-              <div class="card-value color-red" id="paging-faults-val">14</div>
+              <div class="card-value color-red" id="paging-faults-val">0</div>
             </div>
             <div class="card metric-card">
               <div class="card-title">Page Hits</div>
-              <div class="card-value color-green" id="paging-hits-val">42</div>
+              <div class="card-value color-green" id="paging-hits-val">0</div>
             </div>
             <div class="card metric-card">
               <div class="card-title">Hit Ratio</div>
-              <div class="card-value color-purple" id="paging-ratio-val">75.0%</div>
+              <div class="card-value color-purple" id="paging-ratio-val">0.0%</div>
             </div>
           </div>
 
+          <!-- COMPARISON RESULTS PANEL (IF COMPARE CLICKED) -->
+          <div id="paging-comparison-box" class="card margin-top-lg" style="display: none;">
+            <div class="card-header border-bottom">
+              <h3 class="card-heading">Algorithm Performance Comparison</h3>
+              <span class="badge badge-primary" id="paging-best-algo-badge">Best: Optimal</span>
+            </div>
+            <div class="table-container">
+              <table class="data-table" id="pagingComparisonTable">
+                <thead>
+                  <tr>
+                    <th>Algorithm</th>
+                    <th>Total References</th>
+                    <th>Page Faults</th>
+                    <th>Page Hits</th>
+                    <th>Fault Rate (%)</th>
+                    <th>Hit Rate (%)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <!-- Rendered via JS -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- CURRENT PAGE FRAMES STATUS -->
           <div class="card margin-top-lg">
             <div class="card-header border-bottom">
-              <h3 class="card-heading">Page Frames Status</h3>
+              <h3 class="card-heading">Final Page Frames State</h3>
+              <span class="badge badge-info" id="paging-current-algo-badge">FIFO</span>
             </div>
             <div class="card-body">
               <div class="frames-grid" id="pagingFramesGrid">
-                <div class="frame-box"><span class="frame-num">Frame 0</span><span class="frame-content">Page 1</span></div>
-                <div class="frame-box"><span class="frame-num">Frame 1</span><span class="frame-content">Page 4</span></div>
-                <div class="frame-box"><span class="frame-num">Frame 2</span><span class="frame-content">Page 2</span></div>
-                <div class="frame-box"><span class="frame-num">Frame 3</span><span class="frame-content">Page 7</span></div>
+                <!-- Rendered via JS -->
               </div>
+            </div>
+          </div>
+
+          <!-- STEP-BY-STEP FRAME HISTORY LOG TABLE -->
+          <div class="card margin-top-lg">
+            <div class="card-header border-bottom">
+              <h3 class="card-heading">Step-by-Step Page Frame History Log</h3>
+            </div>
+            <div class="table-container">
+              <table class="data-table" id="pagingHistoryTable">
+                <thead>
+                  <tr>
+                    <th>Step #</th>
+                    <th>Referenced Page</th>
+                    <th>Frame Contents State</th>
+                    <th>Status</th>
+                    <th>Replaced Page</th>
+                    <th>Reason / Explanation</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <!-- Rendered via JS -->
+                </tbody>
+              </table>
             </div>
           </div>
         </section>
